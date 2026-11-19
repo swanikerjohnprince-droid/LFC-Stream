@@ -3,6 +3,8 @@ services:
     build:
       context: ./apps/api
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://lfcstream:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/lfcstream
     ports:
       - "8000:8000"
     depends_on:
@@ -24,7 +26,7 @@ services:
     environment:
       POSTGRES_DB: lfcstream
       POSTGRES_USER: lfcstream
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
