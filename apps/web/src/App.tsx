@@ -32,6 +32,8 @@ export default function App() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [selectedVideo, setSelectedVideo] = useState<DriveFile | null>(null);
+  const [nextPageToken, setNextPageToken] = useState<string | undefined>();
 
   async function checkDrive() {
     try {
@@ -44,16 +46,18 @@ export default function App() {
     } finally { setChecking(false); }
   }
 
-  async function loadFiles(parent = folderId, term = search) {
+  async function loadFiles(parent = folderId, term = search, pageToken?: string, append = false) {
     setLoading(true); setError('');
     try {
       const params = new URLSearchParams();
       if (parent) params.set('parent_id', parent);
       if (term.trim()) params.set('search', term.trim());
+      if (pageToken) params.set('page_token', pageToken);
       const response = await fetch(`${API}/drive/files?${params.toString()}`);
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Could not load Drive files.');
-      setFiles(data.files || []);
+      setFiles(current => append ? [...current, ...(data.files || [])] : (data.files || []));
+      setNextPageToken(data.next_page_token || undefined);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load Drive files.');
     } finally { setLoading(false); }
@@ -112,14 +116,15 @@ export default function App() {
           <div className="panel drive-browser">
             <div className="browser-toolbar"><div className="breadcrumbs"><button onClick={() => {setFolderId(undefined);setFolderTrail([]);setSearch('');loadFiles(undefined, '');}}>My Drive</button>{folderTrail.map((f,i)=><span key={f.id}> / <button onClick={() => goToTrail(i)}>{f.name}</button></span>)}</div><form onSubmit={e=>{e.preventDefault();loadFiles(folderId,search);}} className="search-box"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search this folder"/></form></div>
             {loading ? <div className="browser-message"><LoaderCircle className="spin" size={22}/> Loading your Drive…</div> :
-              files.length ? <div className="file-list">{files.map(file=><button className="file-row" key={file.id} onClick={()=>file.kind === 'folder' ? openFolder(file) : undefined} disabled={file.kind !== 'folder'}><span className={`file-icon ${file.kind}`}>{file.kind === 'folder' ? <Folder size={18}/> : <FileVideo size={18}/>}</span><span className="file-name"><b>{file.name}</b><small>{file.kind === 'folder' ? 'Folder' : file.mime_type}</small></span><span className="file-size">{formatBytes(file.size)}</span></button>)}</div> :
-              <div className="browser-message">No files found in this folder.</div>}
+              files.length ? <div className="file-list">{files.map(file=><button className="file-row" key={file.id} onClick={()=>file.kind === 'folder' ? openFolder(file) : file.kind === 'video' ? setSelectedVideo(file) : undefined} disabled={file.kind === 'file'}><span className={`file-icon ${file.kind}`}>{file.kind === 'folder' ? <Folder size={18}/> : <FileVideo size={18}/>}</span><span className="file-name"><b>{file.name}</b><small>{file.kind === 'folder' ? 'Folder' : file.mime_type}</small></span><span className="file-size">{formatBytes(file.size)}</span></button>)}</div> :
+              <div className="browser-message">No files found in this folder.</div>}{nextPageToken && <div className="load-more"><button className="secondary small" onClick={()=>loadFiles(folderId,search,nextPageToken,true)}>Load more files</button></div>}
           </div>}
       </section> : page === 'Overview' ? <>
         <section className="welcome"><div><div className="eyebrow accent">STREAMING, SIMPLIFIED</div><h2>Your broadcasts.<br/><em>Always on.</em></h2><p>Manage your Google Drive media, schedule broadcasts and run continuous channels from one cloud workspace.</p><div className="welcome-actions"><button className="primary" onClick={()=>setPage('Live channels')}><Radio size={17}/> Set up a channel</button><button className="secondary" onClick={()=>setPage('Media library')}><FolderOpen size={17}/> {connected ? 'Browse Google Drive' : 'Connect Google Drive'}</button></div></div><div className="hero-visual"><div className="orbit orbit-one"/><div className="orbit orbit-two"/><div className="play-card"><div className="play-icon"><Clapperboard size={30}/></div><span>YOUR MEDIA</span><b>One library.<br/>Every platform.</b><div className="platforms"><span><Youtube size={16}/> YouTube</span><span className="tiktok">♪ TikTok</span></div></div></div></section>
         <section className="stats"><article><div className="stat-icon purple"><Radio size={18}/></div><span>ACTIVE CHANNELS</span><strong>0</strong><small>No broadcasts running</small></article><article><div className="stat-icon blue"><Clapperboard size={18}/></div><span>MEDIA ASSETS</span><strong>{connected ? 'Connected' : '—'}</strong><small>{connected ? 'Google Drive connected' : 'Connect Drive to browse videos'}</small></article><article><div className="stat-icon green"><CalendarDays size={18}/></div><span>UPCOMING SCHEDULES</span><strong>0</strong><small>Nothing scheduled yet</small></article><article><div className="stat-icon orange"><Activity size={18}/></div><span>DESTINATIONS</span><strong>0</strong><small>Connect a streaming destination</small></article></section>
         <section className="lower-grid"><article className="panel"><div className="panel-heading"><div><h3>Live channels</h3><p>Your continuous and scheduled broadcasts</p></div></div><div className="empty-state"><div className="empty-icon"><Radio size={23}/></div><b>No channels yet</b><p>Create a channel to start planning your first broadcast.</p><button className="secondary small" onClick={()=>setPage('Live channels')}>Create your first channel</button></div></article><article className="panel activity-panel"><div className="panel-heading"><div><h3>Recent activity</h3><p>Updates from your workspace</p></div></div><div className="activity-empty"><span className="activity-line"/><div><b>All quiet for now</b><p>Your broadcast activity will appear here.</p></div></div></article></section>
       </> : <section className="panel placeholder-page"><div className="empty-icon"><Radio size={23}/></div><h3>{page} are coming next</h3><p>This section will be connected as the broadcast engine is implemented.</p></section>}
+      {selectedVideo && <div className="video-modal" role="dialog" aria-modal="true" aria-label={selectedVideo.name}><div className="video-modal-card"><div className="video-modal-head"><div><b>{selectedVideo.name}</b><small>Preview streamed progressively from Google Drive</small></div><button className="secondary small" onClick={()=>setSelectedVideo(null)}>Close</button></div><video controls autoPlay playsInline src={API + '/drive/files/' + selectedVideo.id + '/stream'} /></div></div>}
       <footer>LFC STREAM <span>·</span> CLOUD BROADCAST CONTROL <span className="version">EARLY ACCESS · 0.2.0</span></footer>
     </main>
   </div>;
