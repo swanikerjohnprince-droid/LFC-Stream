@@ -23,7 +23,7 @@ The repository now includes:
 - PostgreSQL persistence for the Drive connection and Redis-backed, expiring OAuth state.
 - Nginx routing from the web container to the API container.
 
-This is an early integration milestone, not a deployed or production-ready streaming service. The Drive browser and progressive video preview are implemented. FFmpeg broadcast workers, destination credential management, playlists, schedules, channel orchestration, and 24/7 execution are still to be implemented.
+This is an early integration milestone, not a deployed or production-ready streaming service. The Drive browser, progressive video preview, encrypted RTMP destination management, one-off broadcast queue, and FFmpeg worker are implemented. Continuous folder channels, looping playlists, scheduled/recurring broadcasts, simultaneous multi-destination output, portrait profiles, and platform-specific YouTube/TikTok account APIs are still to be implemented.
 
 ## Local setup
 
@@ -87,6 +87,13 @@ The app requests the drive.readonly scope. It can read and list Drive content bu
 
 Back up the encryption key securely. If it is lost, stored Google credentials cannot be decrypted and the Drive account will need to be connected again. Rotating the key requires a planned credential re-encryption migration.
 
+## Current broadcast limitations
+
+- The worker currently runs one queued video broadcast at a time per worker container and outputs a landscape H.264/AAC RTMP stream.
+- RTMP ingest details are entered manually. YouTube Live and TikTok LIVE eligibility, stream setup, and account-side configuration remain the account owner's responsibility.
+- The current worker does not yet loop folders/playlists, schedule future starts, or fan one source out to multiple destinations.
+- Stop requests are handled by the worker between incoming media chunks; a stalled upstream request can delay stop until its network timeout.
+
 ## Planned architecture
 
 - apps/api: FastAPI control plane and authenticated Google Drive integration.
@@ -106,7 +113,7 @@ Back up the encryption key securely. If it is lost, stored Google credentials ca
 
 ## Security
 
-Dashboard access is protected by a single-admin login and signed HttpOnly session cookie. Passwords are verified against a PBKDF2-SHA256 hash. OAuth tokens are encrypted at rest using the configured Fernet key. OAuth state values are random, stored in Redis, expire after ten minutes, and are consumed on callback. The Google Drive integration uses read-only scope. For a public deployment, add user authentication, HTTPS, CSRF protections appropriate to the chosen auth model, audit logging, and rate limits before enabling account access.
+Dashboard access is protected by a single-admin login and signed HttpOnly session cookie. Passwords are verified against a PBKDF2-SHA256 hash. OAuth tokens and RTMP ingest URLs are encrypted at rest using the configured Fernet key. OAuth state values are random, stored in Redis, expire after ten minutes, and are consumed on callback. The Google Drive integration uses read-only scope. For a public deployment, add user authentication, HTTPS, CSRF protections appropriate to the chosen auth model, audit logging, and rate limits before enabling account access.
  + str(rounds) + '
 
 The browser receives a signed HttpOnly cookie that expires after 12 hours. Do not disable HTTPS or expose the service with default/empty authentication settings.
