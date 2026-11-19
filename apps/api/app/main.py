@@ -19,8 +19,10 @@ from googleapiclient.discovery import build
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from redis import Redis
-from sqlalchemy import DateTime, Integer, String, create_engine
+from sqlalchemy import DateTime, ForeignKey, Integer, String, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from urllib.parse import urlsplit
+import ipaddress
 
 
 class Settings(BaseSettings):
@@ -60,6 +62,59 @@ app.add_middleware(
 
 class Base(DeclarativeBase):
     pass
+
+
+class StreamDestination(Base):
+    __tablename__ = "stream_destinations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    platform: Mapped[str] = mapped_column(String(20), nullable=False)
+    encrypted_rtmp_url: Mapped[str] = mapped_column(String(4096), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class Broadcast(Base):
+    __tablename__ = "broadcasts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    drive_file_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    destination_id: Mapped[int] = mapped_column(ForeignKey("stream_destinations.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+
+class DestinationPayload(BaseModel):
+    name: str
+    platform: str
+    rtmp_url: str
+
+
+class BroadcastPayload(BaseModel):
+    name: str | None = None
+    drive_file_id: str
+    destination_id: int
+
+
+def validate_rtmp_url(value: str) -> str:
+    parsed = urlsplit(value.strip())
+    if parsed.scheme not in ("rtmp", "rtmps") or not parsed.hostname:
+        raise HTTPException(400, "Destination must be a valid RTMP or RTMPS ingest URL.")
+    host = parsed.hostname.lower()
+    if host in ("localhost", "localhost.localdomain") or host.endswith(".local"):
+        raise HTTPException(400, "Local network destinations are not allowed.")
+    try:
+        address = ipaddress.ip_address(host)
+        if not address.is_global:
+            raise HTTPException(400, "Private or reserved destination addresses are not allowed.")
+    except ValueError:
+        pass
+    if len(value) > 4000:
+        raise HTTPException(400, "Destination URL is too long.")
+    return value.strip()
 
 
 class GoogleConnection(Base):
@@ -413,6 +468,131 @@ def stream_drive_video(
         headers=response_headers,
     )
 
+
+
+@app.get("/api/v1/destinations", tags=["destinations"])
+def list_destinations(_: str = Depends(require_auth)) -> list[dict[str, Any]]:
+    with SessionLocal() as session:
+        rows = session.query(StreamDestination).order_by(StreamDestination.created_at.desc()).all()
+        return [{"id": row.id, "name": row.name, "platform": row.platform, "created_at": row.created_at.isoformat()} for row in rows]
+
+
+@app.post("/api/v1/destinations", tags=["destinations"])
+def create_destination(payload: DestinationPayload, _: str = Depends(require_auth)) -> dict[str, Any]:
+    platform = payload.platform.lower().strip()
+    if platform not in ("youtube", "tiktok", "custom"):
+        raise HTTPException(400, "Platform must be youtube, tiktok, or custom.")
+    name = payload.name.strip()
+    if not name or len(name) > 120:
+        raise HTTPException(400, "Destination name must be between 1 and 120 characters.")
+    rtmp_url = validate_rtmp_url(payload.rtmp_url)
+    encrypted = get_fernet().encrypt(rtmp_url.encode()).decode()
+    with SessionLocal() as session:
+        row = StreamDestination(
+            name=name,
+            platform=platform,
+            encrypted_rtmp_url=encrypted,
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return {"id": row.id, "name": row.name, "platform": row.platform, "created_at": row.created_at.isoformat()}
+
+
+@app.delete("/api/v1/destinations/{destination_id}", tags=["destinations"])
+def delete_destination(destination_id: int, _: str = Depends(require_auth)) -> dict[str, bool]:
+    with SessionLocal() as session:
+        row = session.get(StreamDestination, destination_id)
+        if row is None:
+            raise HTTPException(404, "Destination not found.")
+        active = session.query(Broadcast).filter(
+            Broadcast.destination_id == destination_id,
+            Broadcast.status.in_(["queued", "running"]),
+        ).first()
+        if active:
+            raise HTTPException(409, "Stop active broadcasts before deleting this destination.")
+        session.delete(row)
+        session.commit()
+    return {"deleted": True}
+
+
+@app.get("/api/v1/broadcasts", tags=["broadcasts"])
+def list_broadcasts(_: str = Depends(require_auth)) -> list[dict[str, Any]]:
+    with SessionLocal() as session:
+        rows = session.query(Broadcast).order_by(Broadcast.created_at.desc()).limit(100).all()
+        return [{
+            "id": row.id,
+            "name": row.name,
+            "source_name": row.source_name,
+            "destination_id": row.destination_id,
+            "status": row.status,
+            "created_at": row.created_at.isoformat(),
+            "started_at": row.started_at.isoformat() if row.started_at else None,
+            "ended_at": row.ended_at.isoformat() if row.ended_at else None,
+            "error_message": row.error_message,
+        } for row in rows]
+
+
+@app.post("/api/v1/broadcasts", tags=["broadcasts"])
+def create_broadcast(payload: BroadcastPayload, _: str = Depends(require_auth)) -> dict[str, Any]:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{5,200}", payload.drive_file_id):
+        raise HTTPException(400, "Invalid Google Drive file ID.")
+    try:
+        source = drive_service().files().get(
+            fileId=payload.drive_file_id,
+            fields="id,name,mimeType,trashed",
+            supportsAllDrives=True,
+        ).execute()
+    except Exception:
+        raise HTTPException(404, "The selected Google Drive file could not be found.")
+    if source.get("trashed") or not source.get("mimeType", "").startswith("video/"):
+        raise HTTPException(415, "Select a video file to broadcast.")
+    with SessionLocal() as session:
+        destination = session.get(StreamDestination, payload.destination_id)
+        if destination is None:
+            raise HTTPException(404, "Streaming destination not found.")
+        row = Broadcast(
+            name=(payload.name or source.get("name", "Untitled broadcast"))[:200],
+            drive_file_id=payload.drive_file_id,
+            source_name=source.get("name", "Untitled video"),
+            destination_id=destination.id,
+            status="queued",
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        broadcast_id = row.id
+    try:
+        redis_client.rpush("lfc-stream:broadcast-queue", str(broadcast_id))
+    except Exception:
+        with SessionLocal() as session:
+            row = session.get(Broadcast, broadcast_id)
+            if row:
+                row.status = "failed"
+                row.error_message = "Broadcast queue is unavailable."
+                row.ended_at = datetime.now(timezone.utc)
+                session.commit()
+        raise HTTPException(503, "Broadcast queue is unavailable.")
+    return {"id": broadcast_id, "status": "queued"}
+
+
+@app.post("/api/v1/broadcasts/{broadcast_id}/stop", tags=["broadcasts"])
+def stop_broadcast(broadcast_id: int, _: str = Depends(require_auth)) -> dict[str, str]:
+    with SessionLocal() as session:
+        row = session.get(Broadcast, broadcast_id)
+        if row is None:
+            raise HTTPException(404, "Broadcast not found.")
+        if row.status not in ("queued", "running"):
+            raise HTTPException(409, "This broadcast is not active.")
+        if row.status == "queued":
+            row.status = "stopped"
+            row.ended_at = datetime.now(timezone.utc)
+            session.commit()
+            return {"status": "stopped"}
+    redis_client.setex(f"lfc-stream:stop:{broadcast_id}", 3600, "1")
+    return {"status": "stopping"}
 
 @app.post("/api/v1/drive/disconnect", tags=["google-drive"])
 def disconnect_google_drive(_: str = Depends(require_auth)) -> dict[str, bool]:
