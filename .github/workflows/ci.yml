@@ -39,5 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Compile worker
+        run: python -m compileall -q apps/worker
       - name: Build FFmpeg worker image
         run: docker build -f apps/worker/Dockerfile -t lfc-stream-worker .
