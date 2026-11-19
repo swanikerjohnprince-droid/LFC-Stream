@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Activity, ArrowLeft, CalendarDays, Clapperboard, Cloud, FileVideo, Folder, FolderOpen, LayoutDashboard, ListVideo, LoaderCircle, Radio, Search, Settings, MonitorPlay } from 'lucide-react';
 
+type Destination = { id: number; name: string; platform: string };
+type Broadcast = { id: number; name: string; source_name: string; destination_id: number; status: string; created_at: string };
 type DriveFile = {
   id: string; name: string; mime_type: string; kind: 'folder' | 'video' | 'file';
   size?: string; modified_time?: string; thumbnail_url?: string;
@@ -11,6 +13,7 @@ const nav = [
   { label: 'Live channels', icon: Radio },
   { label: 'Schedules', icon: CalendarDays },
   { label: 'Playlists', icon: ListVideo },
+  { label: 'Destinations', icon: Cloud },
 ];
 const API = '/api/v1';
 
@@ -39,6 +42,13 @@ export default function App() {
   const [error, setError] = useState('');
   const [selectedVideo, setSelectedVideo] = useState<DriveFile | null>(null);
   const [nextPageToken, setNextPageToken] = useState<string | undefined>();
+  const [destinations, setDestinations] = useState<Destination[]>([]);
+  const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
+  const [selectedDestination, setSelectedDestination] = useState('');
+  const [destinationName, setDestinationName] = useState('');
+  const [destinationPlatform, setDestinationPlatform] = useState('youtube');
+  const [destinationUrl, setDestinationUrl] = useState('');
+  const [savingDestination, setSavingDestination] = useState(false);
 
   async function signIn(event: FormEvent) {
     event.preventDefault();
@@ -63,6 +73,65 @@ export default function App() {
     await fetch(`${API}/auth/logout`, { method: 'POST' });
     setAuthenticated(false); setConnected(false); setFiles([]);
     setSelectedVideo(null);
+  }
+
+  async function loadDestinations() {
+    try {
+      const response = await fetch(`${API}/destinations`);
+      if (!response.ok) throw new Error('Could not load destinations.');
+      setDestinations(await response.json());
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not load destinations.'); }
+  }
+
+  async function loadBroadcasts() {
+    try {
+      const response = await fetch(`${API}/broadcasts`);
+      if (!response.ok) throw new Error('Could not load broadcasts.');
+      setBroadcasts(await response.json());
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not load broadcasts.'); }
+  }
+
+  async function createDestination(event: FormEvent) {
+    event.preventDefault();
+    setSavingDestination(true); setError('');
+    try {
+      const response = await fetch(`${API}/destinations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: destinationName, platform: destinationPlatform, rtmp_url: destinationUrl }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Could not save destination.');
+      setDestinationName(''); setDestinationUrl('');
+      await loadDestinations();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not save destination.'); }
+    finally { setSavingDestination(false); }
+  }
+
+  async function startBroadcast() {
+    if (!selectedVideo || !selectedDestination) return;
+    setError('');
+    try {
+      const response = await fetch(`${API}/broadcasts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ drive_file_id: selectedVideo.id, destination_id: Number(selectedDestination) }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Could not queue broadcast.');
+      setSelectedVideo(null);
+      setPage('Live channels');
+      await loadBroadcasts();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not start broadcast.'); }
+  }
+
+  async function stopBroadcast(id: number) {
+    try {
+      const response = await fetch(`${API}/broadcasts/${id}/stop`, { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Could not stop broadcast.');
+      await loadBroadcasts();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not stop broadcast.'); }
   }
 
   async function checkDrive() {
@@ -109,6 +178,8 @@ export default function App() {
 
   useEffect(() => {
     if (page === 'Media library' && connected) loadFiles(undefined, '');
+    if (page === 'Destinations' || page === 'Live channels') loadDestinations();
+    if (page === 'Live channels') loadBroadcasts();
   }, [page, connected]);
 
   function openFolder(file: DriveFile) {
@@ -149,15 +220,33 @@ export default function App() {
           <div className="panel drive-browser">
             <div className="browser-toolbar"><div className="breadcrumbs"><button onClick={() => {setFolderId(undefined);setFolderTrail([]);setSearch('');loadFiles(undefined, '');}}>My Drive</button>{folderTrail.map((f,i)=><span key={f.id}> / <button onClick={() => goToTrail(i)}>{f.name}</button></span>)}</div><form onSubmit={e=>{e.preventDefault();loadFiles(folderId,search);}} className="search-box"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search this folder"/></form></div>
             {loading ? <div className="browser-message"><LoaderCircle className="spin" size={22}/> Loading your Drive…</div> :
-              files.length ? <div className="file-list">{files.map(file=><button className="file-row" key={file.id} onClick={()=>file.kind === 'folder' ? openFolder(file) : file.kind === 'video' ? setSelectedVideo(file) : undefined} disabled={file.kind === 'file'}><span className={`file-icon ${file.kind}`}>{file.kind === 'folder' ? <Folder size={18}/> : <FileVideo size={18}/>}</span><span className="file-name"><b>{file.name}</b><small>{file.kind === 'folder' ? 'Folder' : file.mime_type}</small></span><span className="file-size">{formatBytes(file.size)}</span></button>)}</div> :
+              files.length ? <div className="file-list">{files.map(file=><button className="file-row" key={file.id} onClick={()=>{if(file.kind === 'folder') openFolder(file); else if(file.kind === 'video'){setSelectedVideo(file);setSelectedDestination('');loadDestinations();}}} disabled={file.kind === 'file'}><span className={`file-icon ${file.kind}`}>{file.kind === 'folder' ? <Folder size={18}/> : <FileVideo size={18}/>}</span><span className="file-name"><b>{file.name}</b><small>{file.kind === 'folder' ? 'Folder' : file.mime_type}</small></span><span className="file-size">{formatBytes(file.size)}</span></button>)}</div> :
               <div className="browser-message">No files found in this folder.</div>}{nextPageToken && <div className="load-more"><button className="secondary small" onClick={()=>loadFiles(folderId,search,nextPageToken,true)}>Load more files</button></div>}
           </div>}
       </section> : page === 'Overview' ? <>
         <section className="welcome"><div><div className="eyebrow accent">STREAMING, SIMPLIFIED</div><h2>Your broadcasts.<br/><em>Always on.</em></h2><p>Manage your Google Drive media, schedule broadcasts and run continuous channels from one cloud workspace.</p><div className="welcome-actions"><button className="primary" onClick={()=>setPage('Live channels')}><Radio size={17}/> Set up a channel</button><button className="secondary" onClick={()=>setPage('Media library')}><FolderOpen size={17}/> {connected ? 'Browse Google Drive' : 'Connect Google Drive'}</button></div></div><div className="hero-visual"><div className="orbit orbit-one"/><div className="orbit orbit-two"/><div className="play-card"><div className="play-icon"><Clapperboard size={30}/></div><span>YOUR MEDIA</span><b>One library.<br/>Every platform.</b><div className="platforms"><span><MonitorPlay size={16}/> YouTube</span><span className="tiktok">♪ TikTok</span></div></div></div></section>
         <section className="stats"><article><div className="stat-icon purple"><Radio size={18}/></div><span>ACTIVE CHANNELS</span><strong>0</strong><small>No broadcasts running</small></article><article><div className="stat-icon blue"><Clapperboard size={18}/></div><span>MEDIA ASSETS</span><strong>{connected ? 'Connected' : '—'}</strong><small>{connected ? 'Google Drive connected' : 'Connect Drive to browse videos'}</small></article><article><div className="stat-icon green"><CalendarDays size={18}/></div><span>UPCOMING SCHEDULES</span><strong>0</strong><small>Nothing scheduled yet</small></article><article><div className="stat-icon orange"><Activity size={18}/></div><span>DESTINATIONS</span><strong>0</strong><small>Connect a streaming destination</small></article></section>
         <section className="lower-grid"><article className="panel"><div className="panel-heading"><div><h3>Live channels</h3><p>Your continuous and scheduled broadcasts</p></div></div><div className="empty-state"><div className="empty-icon"><Radio size={23}/></div><b>No channels yet</b><p>Create a channel to start planning your first broadcast.</p><button className="secondary small" onClick={()=>setPage('Live channels')}>Create your first channel</button></div></article><article className="panel activity-panel"><div className="panel-heading"><div><h3>Recent activity</h3><p>Updates from your workspace</p></div></div><div className="activity-empty"><span className="activity-line"/><div><b>All quiet for now</b><p>Your broadcast activity will appear here.</p></div></div></article></section>
-      </> : <section className="panel placeholder-page"><div className="empty-icon"><Radio size={23}/></div><h3>{page} are coming next</h3><p>This section will be connected as the broadcast engine is implemented.</p></section>}
-      {selectedVideo && <div className="video-modal" role="dialog" aria-modal="true" aria-label={selectedVideo.name}><div className="video-modal-card"><div className="video-modal-head"><div><b>{selectedVideo.name}</b><small>Preview streamed progressively from Google Drive</small></div><button className="secondary small" onClick={()=>setSelectedVideo(null)}>Close</button></div><video controls autoPlay playsInline src={API + '/drive/files/' + selectedVideo.id + '/stream'} /></div></div>}
+      </> : page === 'Destinations' ? <section className="library-page">
+        <div className="library-heading"><div><h2>Streaming destinations</h2><p>Connect your YouTube Live or TikTok LIVE RTMP ingest details.</p></div></div>
+        {error && <div className="error-banner">{error}</div>}
+        <div className="destination-grid">
+          <form className="panel destination-form" onSubmit={createDestination}>
+            <h3>Add a destination</h3><p>Stream keys are encrypted before they are saved.</p>
+            <label>Destination name<input value={destinationName} onChange={e=>setDestinationName(e.target.value)} placeholder="e.g. Love First YouTube" required maxLength={120}/></label>
+            <label>Platform<select value={destinationPlatform} onChange={e=>setDestinationPlatform(e.target.value)}><option value="youtube">YouTube Live</option><option value="tiktok">TikTok LIVE</option><option value="custom">Custom RTMP</option></select></label>
+            <label>RTMP / RTMPS ingest URL<input type="password" value={destinationUrl} onChange={e=>setDestinationUrl(e.target.value)} placeholder="rtmps://…/…" required autoComplete="off"/></label>
+            <button className="primary" disabled={savingDestination || !destinationName.trim() || !destinationUrl.trim()}>{savingDestination ? 'Saving…' : 'Save destination'}</button>
+          </form>
+          <div className="panel destination-list"><div className="panel-heading"><div><h3>Your destinations</h3><p>Saved ingest endpoints</p></div></div>{destinations.length ? destinations.map(d=><div className="destination-row" key={d.id}><span className="file-icon"><Cloud size={18}/></span><div><b>{d.name}</b><small>{d.platform.toUpperCase()}</small></div></div>) : <div className="browser-message">No destinations connected yet.</div>}</div>
+        </div>
+        <p className="security-note">Only add ingest details from accounts you control. TikTok LIVE external RTMP access depends on account eligibility and platform approval.</p>
+      </section> : page === 'Live channels' ? <section className="library-page">
+        <div className="library-heading"><div><h2>Broadcast queue</h2><p>One-off broadcasts are sent to the cloud FFmpeg worker.</p></div><button className="secondary" onClick={loadBroadcasts}>Refresh</button></div>
+        {error && <div className="error-banner">{error}</div>}
+        <div className="panel destination-list"><div className="panel-heading"><div><h3>Broadcasts</h3><p>Queued, running and completed streams</p></div></div>{broadcasts.length ? broadcasts.map(b=><div className="broadcast-row" key={b.id}><div className="broadcast-status"><i className={b.status}/></div><div className="broadcast-info"><b>{b.name}</b><small>{b.source_name} · {b.status}</small></div><span className="broadcast-state">{b.status}</span>{['queued','running'].includes(b.status) && <button className="secondary small" onClick={()=>stopBroadcast(b.id)}>Stop</button>}</div>) : <div className="browser-message">No broadcasts yet. Browse your Drive library and select a video to start one.</div>}</div>
+      </section> : <section className="panel placeholder-page"><div className="empty-icon"><Radio size={23}/></div><h3>{page} are coming next</h3><p>This section will be connected as the broadcast engine is implemented.</p></section>}
+      {selectedVideo && <div className="video-modal" role="dialog" aria-modal="true" aria-label={selectedVideo.name}><div className="video-modal-card"><div className="video-modal-head"><div><b>{selectedVideo.name}</b><small>Preview streamed progressively from Google Drive</small></div><button className="secondary small" onClick={()=>setSelectedVideo(null)}>Close</button></div><video controls autoPlay playsInline src={API + '/drive/files/' + selectedVideo.id + '/stream'} /><div className="broadcast-from-preview"><label>Stream this video to<select value={selectedDestination} onChange={e=>setSelectedDestination(e.target.value)}><option value="">Choose a destination</option>{destinations.map(d=><option key={d.id} value={d.id}>{d.name} · {d.platform}</option>)}</select></label><button className="primary" disabled={!selectedDestination} onClick={startBroadcast}>Start broadcast</button>{destinations.length === 0 && <small>Add a destination in the Destinations section first.</small>}</div></div></div>}
       <footer>LFC STREAM <span>·</span> CLOUD BROADCAST CONTROL <span className="version">EARLY ACCESS · 0.2.0</span></footer>
     </main>
   </div>;
