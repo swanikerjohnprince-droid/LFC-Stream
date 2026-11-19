@@ -256,6 +256,76 @@ def list_drive_files(
     return {"files": items, "next_page_token": result.get("nextPageToken")}
 
 
+
+@app.get("/api/v1/drive/files/{file_id}/stream", tags=["google-drive"])
+def stream_drive_video(
+    file_id: str,
+    range_header: str | None = Header(default=None, alias="Range"),
+) -> StreamingResponse:
+    """Proxy a Drive video progressively and forward browser byte-range requests."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{5,200}", file_id):
+        raise HTTPException(400, "Invalid Google Drive file ID.")
+
+    credentials = load_credentials()
+    service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+    try:
+        metadata = service.files().get(
+            fileId=file_id,
+            fields="id,name,mimeType,size,trashed",
+            supportsAllDrives=True,
+        ).execute()
+    except Exception:
+        raise HTTPException(404, "The requested Drive file could not be found or accessed.")
+
+    mime_type = metadata.get("mimeType", "")
+    if metadata.get("trashed") or not mime_type.startswith("video/"):
+        raise HTTPException(415, "Only video files can be streamed.")
+
+    headers = {}
+    if range_header:
+        requested_range = range_header.strip()
+        if not re.fullmatch(r"bytes=(\d+-\d*|-\d+)", requested_range):
+            raise HTTPException(416, "Only a single valid byte range is supported.")
+        headers["Range"] = requested_range
+
+    media_url = "https://www.googleapis.com/drive/v3/files/" + file_id + "?alt=media"
+    session = AuthorizedSession(credentials)
+    try:
+        upstream = session.get(media_url, headers=headers, stream=True, timeout=(15, 60))
+    except Exception:
+        session.close()
+        raise HTTPException(502, "Google Drive could not start the video stream.")
+
+    if upstream.status_code not in (200, 206, 416):
+        status = upstream.status_code
+        upstream.close()
+        session.close()
+        if status in (401, 403):
+            raise HTTPException(403, "Google Drive denied access to this video.")
+        raise HTTPException(502, "Google Drive returned an error while opening the video.")
+
+    response_headers = {"Accept-Ranges": "bytes"}
+    for header_name in ("Content-Length", "Content-Range"):
+        if header_name in upstream.headers:
+            response_headers[header_name] = upstream.headers[header_name]
+
+    def chunks():
+        try:
+            for chunk in upstream.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+            session.close()
+
+    return StreamingResponse(
+        chunks(),
+        status_code=upstream.status_code,
+        media_type=upstream.headers.get("Content-Type", mime_type),
+        headers=response_headers,
+    )
+
+
 @app.post("/api/v1/drive/disconnect", tags=["google-drive"])
 def disconnect_google_drive() -> dict[str, bool]:
     with SessionLocal() as session:
