@@ -1,17 +1,22 @@
 import json
 import secrets
 import re
+import base64
+import hashlib
+import hmac
+import time
 from datetime import datetime, timezone
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
 from google.auth.transport.requests import AuthorizedSession, Request as GoogleRequest
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
+from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from redis import Redis
 from sqlalchemy import DateTime, Integer, String, create_engine
@@ -27,6 +32,9 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8000/api/v1/auth/google/callback"
     token_encryption_key: str = ""
+    admin_username: str = "admin"
+    admin_password_hash: str = ""
+    jwt_secret_key: str = ""
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
@@ -134,6 +142,84 @@ def drive_service() -> Any:
     return build("drive", "v3", credentials=load_credentials(), cache_discovery=False)
 
 
+class LoginPayload(BaseModel):
+    username: str
+    password: str
+
+
+def _b64encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _b64decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def _verify_password(password: str, encoded: str) -> bool:
+    try:
+        algorithm, rounds, salt, expected = encoded.split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        actual = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), int(rounds))
+        return hmac.compare_digest(_b64encode(actual), expected)
+    except (ValueError, TypeError):
+        return False
+
+
+def _create_session(username: str) -> str:
+    if not settings.jwt_secret_key:
+        raise HTTPException(503, "JWT_SECRET_KEY is not configured.")
+    now = int(time.time())
+    header = _b64encode(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+    payload = _b64encode(json.dumps({"sub": username, "iat": now, "exp": now + 43200}, separators=(",", ":")).encode())
+    signing_input = f"{header}.{payload}".encode()
+    signature = hmac.new(settings.jwt_secret_key.encode(), signing_input, hashlib.sha256).digest()
+    return f"{header}.{payload}.{_b64encode(signature)}"
+
+
+def require_auth(session_cookie: str | None = Cookie(default=None, alias="lfc_session")) -> str:
+    if not session_cookie or not settings.jwt_secret_key:
+        raise HTTPException(401, "Please sign in to LFC Stream.")
+    try:
+        header, payload, signature = session_cookie.split(".")
+        signing_input = f"{header}.{payload}".encode()
+        expected = _b64encode(hmac.new(settings.jwt_secret_key.encode(), signing_input, hashlib.sha256).digest())
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError("Invalid signature")
+        claims = json.loads(_b64decode(payload))
+        if claims.get("exp", 0) < int(time.time()) or claims.get("sub") != settings.admin_username:
+            raise ValueError("Expired or invalid session")
+        return claims["sub"]
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+        raise HTTPException(401, "Your session has expired. Please sign in again.")
+
+
+@app.post("/api/v1/auth/login", tags=["authentication"])
+def login(payload: LoginPayload, response: Response) -> dict[str, bool]:
+    if not settings.admin_password_hash or not settings.jwt_secret_key:
+        raise HTTPException(503, "Dashboard login is not configured on the server.")
+    valid_user = hmac.compare_digest(payload.username, settings.admin_username)
+    valid_password = _verify_password(payload.password, settings.admin_password_hash)
+    if not (valid_user and valid_password):
+        raise HTTPException(401, "Incorrect username or password.")
+    response.set_cookie(
+        key="lfc_session",
+        value=_create_session(settings.admin_username),
+        max_age=43200,
+        httponly=True,
+        secure=settings.app_env == "production",
+        samesite="lax",
+        path="/",
+    )
+    return {"authenticated": True}
+
+
+@app.post("/api/v1/auth/logout", tags=["authentication"])
+def logout(response: Response) -> dict[str, bool]:
+    response.delete_cookie("lfc_session", path="/", httponly=True, samesite="lax")
+    return {"authenticated": False}
+
+
 @app.on_event("startup")
 def startup() -> None:
     Base.metadata.create_all(bind=engine)
@@ -156,7 +242,7 @@ def api_info() -> dict[str, str]:
 
 
 @app.get("/api/v1/auth/google/start", tags=["google-drive"])
-def google_oauth_start() -> RedirectResponse:
+def google_oauth_start(_: str = Depends(require_auth)) -> RedirectResponse:
     oauth_ready()
     state = secrets.token_urlsafe(32)
     try:
@@ -204,7 +290,7 @@ def google_oauth_callback(
 
 
 @app.get("/api/v1/drive/status", tags=["google-drive"])
-def google_drive_status() -> dict[str, Any]:
+def google_drive_status(_: str = Depends(require_auth)) -> dict[str, Any]:
     with SessionLocal() as session:
         row = session.get(GoogleConnection, 1)
         if row is None:
@@ -218,6 +304,7 @@ def list_drive_files(
     search: str | None = Query(default=None, max_length=200),
     page_token: str | None = Query(default=None, max_length=2000),
     page_size: int = Query(default=50, ge=1, le=100),
+    _: str = Depends(require_auth),
 ) -> dict[str, Any]:
     service = drive_service()
     clauses = ["trashed = false"]
@@ -261,6 +348,7 @@ def list_drive_files(
 def stream_drive_video(
     file_id: str,
     range_header: str | None = Header(default=None, alias="Range"),
+    _: str = Depends(require_auth),
 ) -> StreamingResponse:
     """Proxy a Drive video progressively and forward browser byte-range requests."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{5,200}", file_id):
@@ -327,7 +415,7 @@ def stream_drive_video(
 
 
 @app.post("/api/v1/drive/disconnect", tags=["google-drive"])
-def disconnect_google_drive() -> dict[str, bool]:
+def disconnect_google_drive(_: str = Depends(require_auth)) -> dict[str, bool]:
     with SessionLocal() as session:
         row = session.get(GoogleConnection, 1)
         if row is not None:
