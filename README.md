@@ -52,7 +52,159 @@ For local development, the configured Google callback is http://localhost:8000/a
 The app uses a single administrator account. Set `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, and a long random `JWT_SECRET_KEY` in `.env`. The password hash format is PBKDF2-SHA256 with 310,000 iterations. Generate a hash locally with:
 
 ```bash
-python -c "import os,hashlib,base64,getpass; p=getpass.getpass('Admin password: '); s=os.urandom(16); n=310000; d=hashlib.pbkdf2_hmac('sha256',p.encode(),s,n); print('pbkdf2_sha256$%s$%s$%s' % (n,s.hex(),base64.urlsafe_b64encode(d).decode().rstrip('=')))"
+python - <<'PY'
+import os, hashlib, base64, getpass
+password = getpass.getpass('Admin password: ')
+salt = os.urandom(16)
+rounds = 310000
+digest = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, rounds)
+encoded = base64.urlsafe_b64encode(digest).decode().rstrip('=')
+print('pbkdf2_sha256
+
+The browser receives a signed HttpOnly cookie that expires after 12 hours. Do not disable HTTPS or expose the service with default/empty authentication settings.
+
+## Google Cloud OAuth setup
+
+1. In Google Cloud Console, create or select a project.
+2. Enable the Google Drive API.
+3. Configure the OAuth consent screen. While the app is in Testing, add the Google account you will use as a test user.
+4. Create an OAuth client ID with application type Web application.
+5. Add the callback URI from GOOGLE_REDIRECT_URI to Authorized redirect URIs.
+6. Copy the client ID and client secret into the server-side .env file. Never put these values in frontend code or commit .env.
+7. Start LFC Stream and choose Media library → Connect Google Drive.
+
+The app requests the drive.readonly scope. It can read and list Drive content but cannot edit or delete your files. Google may display an unverified-app warning until the OAuth consent configuration and verification requirements for your deployment are completed.
+
+## Environment variables
+
+- DATABASE_URL: PostgreSQL connection string.
+- REDIS_URL: Redis connection string used for short-lived OAuth state.
+- FRONTEND_ORIGIN: browser origin used after OAuth completes.
+- GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET: server-side OAuth client credentials.
+- GOOGLE_REDIRECT_URI: exact callback URI registered in Google Cloud.
+- TOKEN_ENCRYPTION_KEY: Fernet key used to encrypt OAuth credentials before database storage.
+- POSTGRES_PASSWORD: strong database password used by Docker Compose.
+
+Back up the encryption key securely. If it is lost, stored Google credentials cannot be decrypted and the Drive account will need to be connected again. Rotating the key requires a planned credential re-encryption migration.
+
+## Planned architecture
+
+- apps/api: FastAPI control plane and authenticated Google Drive integration.
+- apps/web: React + TypeScript dashboard.
+- apps/worker: FFmpeg orchestration and broadcast lifecycle workers.
+- packages/shared: shared API contracts and configuration where appropriate.
+- PostgreSQL: persistent application state.
+- Redis: job queue, locks, and worker coordination.
+
+## Important operational notes
+
+- Google Drive is the source library, not a guaranteed CDN. The API's video proxy forwards single byte-range requests and streams chunks with bounded memory; Google Drive throttling, transient errors, and seek limitations can still interrupt playback. The eventual FFmpeg worker must implement retries and bounded buffering rather than silently downloading entire assets.
+- YouTube and TikTok credentials and streaming permissions must be supplied by the account owner. TikTok LIVE access and external-streaming/RTMP availability depend on account eligibility and platform rules.
+- “Free software” does not mean unlimited free hosting. 24/7 video encoding and outbound bandwidth require a cloud host with sufficient sustained CPU, network throughput, and storage/buffer capacity. Free tiers may throttle, reclaim, or restrict resources.
+- The current authentication model is single-admin, not multi-user. Use HTTPS in production (the session cookie is marked Secure when APP_ENV=production), keep the admin hash and JWT signing secret private, and add rate limiting before exposing the service publicly.
+- Never commit OAuth client secrets, refresh tokens, RTMP stream keys, or production environment files.
+
+## Security
+
+Dashboard access is protected by a single-admin login and signed HttpOnly session cookie. Passwords are verified against a PBKDF2-SHA256 hash. OAuth tokens are encrypted at rest using the configured Fernet key. OAuth state values are random, stored in Redis, expire after ten minutes, and are consumed on callback. The Google Drive integration uses read-only scope. For a public deployment, add user authentication, HTTPS, CSRF protections appropriate to the chosen auth model, audit logging, and rate limits before enabling account access.
+ + str(rounds) + '
+
+The browser receives a signed HttpOnly cookie that expires after 12 hours. Do not disable HTTPS or expose the service with default/empty authentication settings.
+
+## Google Cloud OAuth setup
+
+1. In Google Cloud Console, create or select a project.
+2. Enable the Google Drive API.
+3. Configure the OAuth consent screen. While the app is in Testing, add the Google account you will use as a test user.
+4. Create an OAuth client ID with application type Web application.
+5. Add the callback URI from GOOGLE_REDIRECT_URI to Authorized redirect URIs.
+6. Copy the client ID and client secret into the server-side .env file. Never put these values in frontend code or commit .env.
+7. Start LFC Stream and choose Media library → Connect Google Drive.
+
+The app requests the drive.readonly scope. It can read and list Drive content but cannot edit or delete your files. Google may display an unverified-app warning until the OAuth consent configuration and verification requirements for your deployment are completed.
+
+## Environment variables
+
+- DATABASE_URL: PostgreSQL connection string.
+- REDIS_URL: Redis connection string used for short-lived OAuth state.
+- FRONTEND_ORIGIN: browser origin used after OAuth completes.
+- GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET: server-side OAuth client credentials.
+- GOOGLE_REDIRECT_URI: exact callback URI registered in Google Cloud.
+- TOKEN_ENCRYPTION_KEY: Fernet key used to encrypt OAuth credentials before database storage.
+- POSTGRES_PASSWORD: strong database password used by Docker Compose.
+
+Back up the encryption key securely. If it is lost, stored Google credentials cannot be decrypted and the Drive account will need to be connected again. Rotating the key requires a planned credential re-encryption migration.
+
+## Planned architecture
+
+- apps/api: FastAPI control plane and authenticated Google Drive integration.
+- apps/web: React + TypeScript dashboard.
+- apps/worker: FFmpeg orchestration and broadcast lifecycle workers.
+- packages/shared: shared API contracts and configuration where appropriate.
+- PostgreSQL: persistent application state.
+- Redis: job queue, locks, and worker coordination.
+
+## Important operational notes
+
+- Google Drive is the source library, not a guaranteed CDN. The API's video proxy forwards single byte-range requests and streams chunks with bounded memory; Google Drive throttling, transient errors, and seek limitations can still interrupt playback. The eventual FFmpeg worker must implement retries and bounded buffering rather than silently downloading entire assets.
+- YouTube and TikTok credentials and streaming permissions must be supplied by the account owner. TikTok LIVE access and external-streaming/RTMP availability depend on account eligibility and platform rules.
+- “Free software” does not mean unlimited free hosting. 24/7 video encoding and outbound bandwidth require a cloud host with sufficient sustained CPU, network throughput, and storage/buffer capacity. Free tiers may throttle, reclaim, or restrict resources.
+- The current authentication model is single-admin, not multi-user. Use HTTPS in production (the session cookie is marked Secure when APP_ENV=production), keep the admin hash and JWT signing secret private, and add rate limiting before exposing the service publicly.
+- Never commit OAuth client secrets, refresh tokens, RTMP stream keys, or production environment files.
+
+## Security
+
+Dashboard access is protected by a single-admin login and signed HttpOnly session cookie. Passwords are verified against a PBKDF2-SHA256 hash. OAuth tokens are encrypted at rest using the configured Fernet key. OAuth state values are random, stored in Redis, expire after ten minutes, and are consumed on callback. The Google Drive integration uses read-only scope. For a public deployment, add user authentication, HTTPS, CSRF protections appropriate to the chosen auth model, audit logging, and rate limits before enabling account access.
+ + salt.hex() + '
+
+The browser receives a signed HttpOnly cookie that expires after 12 hours. Do not disable HTTPS or expose the service with default/empty authentication settings.
+
+## Google Cloud OAuth setup
+
+1. In Google Cloud Console, create or select a project.
+2. Enable the Google Drive API.
+3. Configure the OAuth consent screen. While the app is in Testing, add the Google account you will use as a test user.
+4. Create an OAuth client ID with application type Web application.
+5. Add the callback URI from GOOGLE_REDIRECT_URI to Authorized redirect URIs.
+6. Copy the client ID and client secret into the server-side .env file. Never put these values in frontend code or commit .env.
+7. Start LFC Stream and choose Media library → Connect Google Drive.
+
+The app requests the drive.readonly scope. It can read and list Drive content but cannot edit or delete your files. Google may display an unverified-app warning until the OAuth consent configuration and verification requirements for your deployment are completed.
+
+## Environment variables
+
+- DATABASE_URL: PostgreSQL connection string.
+- REDIS_URL: Redis connection string used for short-lived OAuth state.
+- FRONTEND_ORIGIN: browser origin used after OAuth completes.
+- GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET: server-side OAuth client credentials.
+- GOOGLE_REDIRECT_URI: exact callback URI registered in Google Cloud.
+- TOKEN_ENCRYPTION_KEY: Fernet key used to encrypt OAuth credentials before database storage.
+- POSTGRES_PASSWORD: strong database password used by Docker Compose.
+
+Back up the encryption key securely. If it is lost, stored Google credentials cannot be decrypted and the Drive account will need to be connected again. Rotating the key requires a planned credential re-encryption migration.
+
+## Planned architecture
+
+- apps/api: FastAPI control plane and authenticated Google Drive integration.
+- apps/web: React + TypeScript dashboard.
+- apps/worker: FFmpeg orchestration and broadcast lifecycle workers.
+- packages/shared: shared API contracts and configuration where appropriate.
+- PostgreSQL: persistent application state.
+- Redis: job queue, locks, and worker coordination.
+
+## Important operational notes
+
+- Google Drive is the source library, not a guaranteed CDN. The API's video proxy forwards single byte-range requests and streams chunks with bounded memory; Google Drive throttling, transient errors, and seek limitations can still interrupt playback. The eventual FFmpeg worker must implement retries and bounded buffering rather than silently downloading entire assets.
+- YouTube and TikTok credentials and streaming permissions must be supplied by the account owner. TikTok LIVE access and external-streaming/RTMP availability depend on account eligibility and platform rules.
+- “Free software” does not mean unlimited free hosting. 24/7 video encoding and outbound bandwidth require a cloud host with sufficient sustained CPU, network throughput, and storage/buffer capacity. Free tiers may throttle, reclaim, or restrict resources.
+- The current authentication model is single-admin, not multi-user. Use HTTPS in production (the session cookie is marked Secure when APP_ENV=production), keep the admin hash and JWT signing secret private, and add rate limiting before exposing the service publicly.
+- Never commit OAuth client secrets, refresh tokens, RTMP stream keys, or production environment files.
+
+## Security
+
+Dashboard access is protected by a single-admin login and signed HttpOnly session cookie. Passwords are verified against a PBKDF2-SHA256 hash. OAuth tokens are encrypted at rest using the configured Fernet key. OAuth state values are random, stored in Redis, expire after ten minutes, and are consumed on callback. The Google Drive integration uses read-only scope. For a public deployment, add user authentication, HTTPS, CSRF protections appropriate to the chosen auth model, audit logging, and rate limits before enabling account access.
+ + encoded)
+PY
 ```
 
 The browser receives a signed HttpOnly cookie that expires after 12 hours. Do not disable HTTPS or expose the service with default/empty authentication settings.
