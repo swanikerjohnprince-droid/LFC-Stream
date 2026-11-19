@@ -15,13 +15,14 @@ A cloud-hosted video broadcasting platform that uses Google Drive as its media l
 
 The repository now includes:
 - A FastAPI control-plane API with health checks.
-- A React dashboard with a Google Drive connection screen and media browser.
+- A React dashboard with a Google Drive connection screen, paginated media browser, and in-browser video preview.
+- A progressive Google Drive video proxy that forwards single HTTP byte-range requests to Drive and streams response chunks without staging the complete video locally.
 - Google OAuth authorization using the read-only Google Drive scope.
 - Encrypted-at-rest storage for the Google OAuth credential bundle (Fernet).
 - PostgreSQL persistence for the Drive connection and Redis-backed, expiring OAuth state.
 - Nginx routing from the web container to the API container.
 
-This is an early integration milestone, not a deployed or production-ready streaming service. Video selection, progressive media delivery, FFmpeg workers, destinations, schedules, and 24/7 channel execution are still to be implemented.
+This is an early integration milestone, not a deployed or production-ready streaming service. The Drive browser and progressive video preview are implemented. FFmpeg broadcast workers, destination credential management, playlists, schedules, channel orchestration, and 24/7 execution are still to be implemented.
 
 ## Local setup
 
@@ -80,7 +81,7 @@ Back up the encryption key securely. If it is lost, stored Google credentials ca
 
 ## Important operational notes
 
-- Google Drive is the source library, not a guaranteed CDN. The worker must handle authenticated range requests, throttling, transient errors, and seek limitations. A bounded temporary buffer may be used for reliability; the system must not silently download an entire asset before playback.
+- Google Drive is the source library, not a guaranteed CDN. The API's video proxy forwards single byte-range requests and streams chunks with bounded memory; Google Drive throttling, transient errors, and seek limitations can still interrupt playback. The eventual FFmpeg worker must implement retries and bounded buffering rather than silently downloading entire assets.
 - YouTube and TikTok credentials and streaming permissions must be supplied by the account owner. TikTok LIVE access and external-streaming/RTMP availability depend on account eligibility and platform rules.
 - “Free software” does not mean unlimited free hosting. 24/7 video encoding and outbound bandwidth require a cloud host with sufficient sustained CPU, network throughput, and storage/buffer capacity. Free tiers may throttle, reclaim, or restrict resources.
 - This initial dashboard does not yet authenticate individual LFC Stream users. Do not expose it publicly until application login, HTTPS, access controls, and deployment secrets management are added.
