@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  api-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile API
+        run: python -m compileall -q apps/api/app
+      - name: Build API image
+        run: docker build -t lfc-stream-api ./apps/api
+
+  web-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        working-directory: apps/web
+        run: npm install
+      - name: Build dashboard
+        working-directory: apps/web
+        run: npm run build
+      - name: Build web image
+        run: docker build -t lfc-stream-web ./apps/web
