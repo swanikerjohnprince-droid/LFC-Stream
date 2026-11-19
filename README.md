@@ -14,7 +14,8 @@ A cloud-hosted video broadcasting platform that uses Google Drive as its media l
 ## Current development status
 
 The repository now includes:
-- A FastAPI control-plane API with health checks.
+- A FastAPI control-plane API with health checks and single-admin sign-in.
+- HttpOnly, 12-hour signed session cookies protecting dashboard and Drive endpoints.
 - A React dashboard with a Google Drive connection screen, paginated media browser, and in-browser video preview.
 - A progressive Google Drive video proxy that forwards single HTTP byte-range requests to Drive and streams response chunks without staging the complete video locally.
 - Google OAuth authorization using the read-only Google Drive scope.
@@ -45,6 +46,16 @@ This is an early integration milestone, not a deployed or production-ready strea
 7. Open http://localhost:8080. The API health endpoint is http://localhost:8000/health.
 
 For local development, the configured Google callback is http://localhost:8000/api/v1/auth/google/callback. Add that exact value to the OAuth client's Authorized redirect URIs. The frontend origin defaults to http://localhost:8080.
+
+## Dashboard sign-in
+
+The app uses a single administrator account. Set `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, and a long random `JWT_SECRET_KEY` in `.env`. The password hash format is PBKDF2-SHA256 with 310,000 iterations. Generate a hash locally with:
+
+```bash
+python -c "import os,hashlib,base64,getpass; p=getpass.getpass('Admin password: '); s=os.urandom(16); n=310000; d=hashlib.pbkdf2_hmac('sha256',p.encode(),s,n); print('pbkdf2_sha256$%s$%s$%s' % (n,s.hex(),base64.urlsafe_b64encode(d).decode().rstrip('=')))"
+```
+
+The browser receives a signed HttpOnly cookie that expires after 12 hours. Do not disable HTTPS or expose the service with default/empty authentication settings.
 
 ## Google Cloud OAuth setup
 
@@ -84,9 +95,9 @@ Back up the encryption key securely. If it is lost, stored Google credentials ca
 - Google Drive is the source library, not a guaranteed CDN. The API's video proxy forwards single byte-range requests and streams chunks with bounded memory; Google Drive throttling, transient errors, and seek limitations can still interrupt playback. The eventual FFmpeg worker must implement retries and bounded buffering rather than silently downloading entire assets.
 - YouTube and TikTok credentials and streaming permissions must be supplied by the account owner. TikTok LIVE access and external-streaming/RTMP availability depend on account eligibility and platform rules.
 - “Free software” does not mean unlimited free hosting. 24/7 video encoding and outbound bandwidth require a cloud host with sufficient sustained CPU, network throughput, and storage/buffer capacity. Free tiers may throttle, reclaim, or restrict resources.
-- This initial dashboard does not yet authenticate individual LFC Stream users. Do not expose it publicly until application login, HTTPS, access controls, and deployment secrets management are added.
+- The current authentication model is single-admin, not multi-user. Use HTTPS in production (the session cookie is marked Secure when APP_ENV=production), keep the admin hash and JWT signing secret private, and add rate limiting before exposing the service publicly.
 - Never commit OAuth client secrets, refresh tokens, RTMP stream keys, or production environment files.
 
 ## Security
 
-OAuth tokens are encrypted at rest using the configured Fernet key. OAuth state values are random, stored in Redis, expire after ten minutes, and are consumed on callback. The Google Drive integration uses read-only scope. For a public deployment, add user authentication, HTTPS, CSRF protections appropriate to the chosen auth model, audit logging, and rate limits before enabling account access.
+Dashboard access is protected by a single-admin login and signed HttpOnly session cookie. Passwords are verified against a PBKDF2-SHA256 hash. OAuth tokens are encrypted at rest using the configured Fernet key. OAuth state values are random, stored in Redis, expire after ten minutes, and are consumed on callback. The Google Drive integration uses read-only scope. For a public deployment, add user authentication, HTTPS, CSRF protections appropriate to the chosen auth model, audit logging, and rate limits before enabling account access.
