@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Activity, ArrowLeft, CalendarDays, Clapperboard, Cloud, FileVideo, Folder, FolderOpen, LayoutDashboard, ListVideo, LoaderCircle, Radio, Search, Settings, MonitorPlay } from 'lucide-react';
 
 type DriveFile = {
@@ -40,7 +40,7 @@ export default function App() {
   const [selectedVideo, setSelectedVideo] = useState<DriveFile | null>(null);
   const [nextPageToken, setNextPageToken] = useState<string | undefined>();
 
-  async function signIn(event: React.FormEvent) {
+  async function signIn(event: FormEvent) {
     event.preventDefault();
     setLoggingIn(true); setLoginError('');
     try {
