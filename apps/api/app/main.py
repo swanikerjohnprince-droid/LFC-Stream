@@ -2,7 +2,6 @@ import json
 import secrets
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlencode
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import FastAPI, HTTPException, Query
@@ -14,7 +13,7 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from redis import Redis
-from sqlalchemy import DateTime, Integer, String, create_engine, select
+from sqlalchemy import DateTime, Integer, String, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -221,9 +220,8 @@ def list_drive_files(
 ) -> dict[str, Any]:
     service = drive_service()
     clauses = ["trashed = false"]
-    if parent_id:
-        safe_parent = parent_id.replace("\\", "\\\\").replace("'", "\\'")
-        clauses.append(f"'{safe_parent}' in parents")
+    safe_parent = (parent_id or "root").replace("\\", "\\\\").replace("'", "\\'")
+    clauses.append(f"'{safe_parent}' in parents")
     if search:
         safe_search = search.replace("\\", "\\\\").replace("'", "\\'")
         clauses.append(f"name contains '{safe_search}'")
