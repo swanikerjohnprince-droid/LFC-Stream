@@ -5,8 +5,6 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://lfcstream:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/lfcstream
-    ports:
-      - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
