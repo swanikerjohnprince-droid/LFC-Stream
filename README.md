@@ -106,8 +106,9 @@ Back up the encryption key securely. If it is lost, stored Google credentials ca
 
 ## Important operational notes
 
-- Google Drive is the source library, not a guaranteed CDN. The API's video proxy forwards single byte-range requests and streams chunks with bounded memory; Google Drive throttling, transient errors, and seek limitations can still interrupt playback. The eventual FFmpeg worker must implement retries and bounded buffering rather than silently downloading entire assets.
-- YouTube and TikTok credentials and streaming permissions must be supplied by the account owner. TikTok LIVE access and external-streaming/RTMP availability depend on account eligibility and platform rules.
+- Google Drive is the source library, not a guaranteed CDN. The API preview proxy forwards single byte-range requests. The FFmpeg worker reads the Drive media endpoint in bounded chunks directly into FFmpeg stdin; throttling and transient errors can still interrupt playback. Automatic reconnect/retry and playlist failover are not implemented yet.
+- YouTube and TikTok RTMP/RTMPS ingest details must be supplied by the account owner. TikTok LIVE access and external-streaming/RTMP availability depend on account eligibility and platform rules.
+- The current worker processes one queued video at a time and sends a landscape H.264/AAC output to one destination. Playlist looping, scheduled starts, multi-destination fan-out, and portrait output are future milestones.
 - “Free software” does not mean unlimited free hosting. 24/7 video encoding and outbound bandwidth require a cloud host with sufficient sustained CPU, network throughput, and storage/buffer capacity. Free tiers may throttle, reclaim, or restrict resources.
 - The current authentication model is single-admin, not multi-user. Use HTTPS in production (the session cookie is marked Secure when APP_ENV=production), keep the admin hash and JWT signing secret private, and add rate limiting before exposing the service publicly.
 - Never commit OAuth client secrets, refresh tokens, RTMP stream keys, or production environment files.
