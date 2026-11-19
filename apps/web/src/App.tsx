@@ -25,6 +25,11 @@ function formatBytes(value?: string) {
 export default function App() {
   const [page, setPage] = useState('Overview');
   const [connected, setConnected] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [loginUsername, setLoginUsername] = useState('admin');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [loggingIn, setLoggingIn] = useState(false);
   const [checking, setChecking] = useState(true);
   const [files, setFiles] = useState<DriveFile[]>([]);
   const [folderId, setFolderId] = useState<string | undefined>();
@@ -35,11 +40,38 @@ export default function App() {
   const [selectedVideo, setSelectedVideo] = useState<DriveFile | null>(null);
   const [nextPageToken, setNextPageToken] = useState<string | undefined>();
 
+  async function signIn(event: React.FormEvent) {
+    event.preventDefault();
+    setLoggingIn(true); setLoginError('');
+    try {
+      const response = await fetch(`${API}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Sign-in failed.');
+      setAuthenticated(true);
+      setLoginPassword('');
+      await checkDrive();
+    } catch (e) {
+      setLoginError(e instanceof Error ? e.message : 'Sign-in failed.');
+    } finally { setLoggingIn(false); }
+  }
+
+  async function signOut() {
+    await fetch(`${API}/auth/logout`, { method: 'POST' });
+    setAuthenticated(false); setConnected(false); setFiles([]);
+    setSelectedVideo(null);
+  }
+
   async function checkDrive() {
     try {
       const response = await fetch(`${API}/drive/status`);
+      if (response.status === 401) { setAuthenticated(false); return; }
       if (!response.ok) throw new Error('Could not check Google Drive connection.');
       const data = await response.json();
+      setAuthenticated(true);
       setConnected(Boolean(data.connected));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'API unavailable.');
@@ -100,6 +132,7 @@ export default function App() {
     setConnected(false); setFiles([]); setFolderId(undefined); setFolderTrail([]);
   }
 
+  if (!authenticated && !checking) return <div className="login-screen"><form className="login-card" onSubmit={signIn}><div className="brand-mark"><Radio size={22}/></div><span className="eyebrow accent">PRIVATE BROADCAST WORKSPACE</span><h1>Welcome back.</h1><p>Sign in to manage your LFC Stream workspace.</p><label>Username<input autoComplete="username" value={loginUsername} onChange={e=>setLoginUsername(e.target.value)} required /></label><label>Password<input type="password" autoComplete="current-password" value={loginPassword} onChange={e=>setLoginPassword(e.target.value)} required /></label>{loginError && <div className="error-banner">{loginError}</div>}<button className="primary login-submit" disabled={loggingIn}>{loggingIn ? <LoaderCircle className="spin" size={16}/> : null} Sign in</button><small>Single-admin access · Session expires after 12 hours</small></form></div>;
   return <div className="shell">
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark"><Radio size={21}/></div><div><strong>LFC Stream</strong><span>Broadcast studio</span></div></div>
@@ -108,7 +141,7 @@ export default function App() {
       <div className="sidebar-bottom"><button className="nav-item"><Settings size={18}/><span>Settings</span></button><div className="cloud-card"><Cloud size={18}/><div><b>Cloud control</b><small>Always-on broadcasting</small></div><span className="status-dot"/></div></div>
     </aside>
     <main className="main">
-      <header className="topbar"><div><span className="eyebrow">YOUR BROADCAST WORKSPACE</span><h1>{page}</h1></div><div className="top-actions"><span className="connection"><i/> API online</span><button className="avatar">LF</button></div></header>
+      <header className="topbar"><div><span className="eyebrow">YOUR BROADCAST WORKSPACE</span><h1>{page}</h1></div><div className="top-actions"><span className="connection"><i/> API online</span><button className="secondary small" onClick={signOut}>Sign out</button><button className="avatar">LF</button></div></header>
       {page === 'Media library' ? <section className="library-page">
         <div className="library-heading"><div><h2>Google Drive library</h2><p>Browse your folders and choose video files for broadcasts.</p></div>{connected ? <button className="secondary" onClick={disconnectDrive}>Disconnect Drive</button> : null}</div>
         {error && <div className="error-banner">{error}</div>}
