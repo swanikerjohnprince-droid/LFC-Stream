@@ -34,3 +34,10 @@ jobs:
         run: npm run build
       - name: Build web image
         run: docker build -t lfc-stream-web ./apps/web
+
+  worker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build FFmpeg worker image
+        run: docker build -f apps/worker/Dockerfile -t lfc-stream-worker .
