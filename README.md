@@ -46,7 +46,7 @@ This is an early integration milestone, not a deployed or production-ready strea
 
 7. Open http://localhost:8080. The API health endpoint is http://localhost:8000/health.
 
-For local development, the configured Google callback is http://localhost:8000/api/v1/auth/google/callback. Add that exact value to the OAuth client's Authorized redirect URIs. The frontend origin defaults to http://localhost:8080.
+For local development, the configured Google callback is http://localhost:8080/api/v1/auth/google/callback. Add that exact value to the OAuth client's Authorized redirect URIs. The frontend origin defaults to http://localhost:8080.
 
 ## Dashboard sign-in
 
