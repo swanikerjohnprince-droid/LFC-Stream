@@ -16,11 +16,12 @@ A cloud-hosted video broadcasting platform that uses Google Drive as its media l
 The repository now includes:
 - A FastAPI control-plane API with health checks and single-admin sign-in.
 - HttpOnly, 12-hour signed session cookies protecting dashboard and Drive endpoints.
-- A React dashboard with a Google Drive connection screen, paginated media browser, and in-browser video preview.
-- A progressive Google Drive video proxy that forwards single HTTP byte-range requests to Drive and streams response chunks without staging the complete video locally.
+- A React dashboard with sign-in, a paginated Google Drive browser, progressive video preview, destination management, and broadcast controls.
+- A progressive Google Drive video proxy that forwards byte-range requests and streams response chunks without staging complete videos.
 - Google OAuth authorization using the read-only Google Drive scope.
-- Encrypted-at-rest storage for the Google OAuth credential bundle (Fernet).
-- PostgreSQL persistence for the Drive connection and Redis-backed, expiring OAuth state.
+- Encrypted-at-rest storage for Google OAuth credentials and RTMP destination URLs (Fernet).
+- PostgreSQL persistence for Drive connections, destinations, and broadcasts; Redis-backed OAuth state and broadcast queue.
+- A cloud FFmpeg worker that reads Drive media progressively and pushes one-off H.264/AAC broadcasts to RTMP/RTMPS destinations.
 - Nginx routing from the web container to the API container.
 
 This is an early integration milestone, not a deployed or production-ready streaming service. The Drive browser, progressive video preview, encrypted RTMP destination management, one-off broadcast queue, and FFmpeg worker are implemented. Continuous folder channels, looping playlists, scheduled/recurring broadcasts, simultaneous multi-destination output, portrait profiles, and platform-specific YouTube/TikTok account APIs are still to be implemented.
